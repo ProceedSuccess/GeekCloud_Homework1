@@ -1,0 +1,42 @@
+public class DataBaseRequestor {.....
+........................
+........................
+// Для CREATE
+    static String createLoginPassword = "INSERT INTO Users1 (id_,login,password,nickname) VALUES";
+........................
+........................
+// метод класса, предоставляющего доступ к базе данных
+public static PermissionMessage createAccount(String login, String password, String nickName){
+        try{
+            con = DriverManager.getConnection("jdbc:sqlite:data.db");
+            stmt = con.createStatement();
+            rs = stmt.executeQuery(createLoginPassword + " (" + "'"+ 4 +"'" + "'"+  login + "'" + ","
+                    + "'"+  password + "'" + ","+ "'"+  nickName + "'"+ ");");
+ ???           /* пытаюсь посмотреть, что возвращает resultSet - но java кидает exc    /*
+               /*java.sql.SQLException: [SQLITE_ERROR] SQL error or missing database   /*
+               /*(table Users1 has no column named id_)                                /*
+                for (int i = 0; i < 4; i++) {
+                System.out.println(rs.getString(i));
+            }
+        }catch (SQLException e){
+            e.printStackTrace();
+        }
+        return new PermissionMessage(true);
+    }
+
+моя таблица:
+id      login password  nickname
+1	Vasia	V	Vasiliy
+2	Petia	p	Petr
+3	Misha	m	Mikhail
+создана была так:
+CREATE TABLE Users1 (
+    id1      INTEGER PRIMARY KEY ASC AUTOINCREMENT
+                     UNIQUE
+                     NOT NULL,
+    login    TEXT    UNIQUE
+                     NOT NULL,
+    password TEXT    NOT NULL,
+    nickname TEXT    UNIQUE
+                     NOT NULL
+);
