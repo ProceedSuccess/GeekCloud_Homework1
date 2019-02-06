@@ -1,0 +1,512 @@
+public class MainClient extends Application {
+    @Override
+    public void start(Stage primaryStage) throws Exception{
+        FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/main.fxml"));
+        Parent root = fxmlLoader.load();
+        primaryStage.setTitle("GeekCloud");
+        Scene scene = new Scene(root);
+        primaryStage.setScene(scene);
+        primaryStage.show();
+    }
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
+public class MainController implements Initializable {
+    @FXML
+    TextField tfFileName;
+    @FXML
+    TextField tfLoadFile;
+    @FXML
+    ListView<String> clientFilesList;
+    @FXML
+    ListView<String> serverFilesList;
+    @FXML
+    Button download;
+    @FXML
+    Button upload;
+    @Override
+    public void initialize(URL location, ResourceBundle resources) {
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+
+                NettyNetwork.getInstance().start();
+                while(true){
+
+                }
+            }
+        }).start();
+
+        clientFilesList.setItems(FXCollections.observableArrayList());
+        serverFilesList.setItems(FXCollections.observableArrayList());
+        refreshLocalFilesList();
+        refreshServerFilesList();
+    }
+
+    public void pressOnDownloadBtn(ActionEvent actionEvent) {
+        if (tfFileName.getLength() > 0) {
+            try{
+            NettyNetwork.getInstance().sendFileRequest((byte)4,"222.mp4");
+            tfFileName.clear();
+            }catch (IOException e){e.printStackTrace();}
+        }
+    }
+
+    public void pressOnUploadBtn(ActionEvent actionEvent)  {
+        try{
+            if (tfLoadFile.getLength() > 0 && upload.isArmed()) {
+                NettyNetwork.getInstance().sendFile((byte)3,tfLoadFile.getText());
+            }
+
+        }catch (IOException r){r.printStackTrace();}
+
+    }
+
+    public void refreshLocalFilesList() {
+        if (Platform.isFxApplicationThread()) {
+            try {
+                clientFilesList.getItems().clear();
+                Files.list(Paths.get("client_storage")).map(p -> p.getFileName().toString()).forEach(o -> clientFilesList.getItems().add(o));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            Platform.runLater(() -> {
+                try {
+                    clientFilesList.getItems().clear();
+                    Files.list(Paths.get("client_storage")).map(p -> p.getFileName().toString()).forEach(o -> clientFilesList.getItems().add(o));
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+    }
+    public void refreshServerFilesList() {
+        if (Platform.isFxApplicationThread()) {
+            try {
+                serverFilesList.getItems().clear();
+                Files.list(Paths.get("server_storage")).map(p -> p.getFileName().toString()).forEach(o -> serverFilesList.getItems().add(o));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            Platform.runLater(() -> {
+                try {
+                    serverFilesList.getItems().clear();
+                    Files.list(Paths.get("server_storage")).map(p -> p.getFileName().toString()).forEach(o -> serverFilesList.getItems().add(o));
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+    }
+}
+public class NettyNetwork {
+    private static NettyNetwork ourInstance = new NettyNetwork();
+    public static NettyNetwork getInstance() {
+        return ourInstance;
+    }
+    private NettyNetwork() { }
+    private Channel currentChannel;
+    public Channel getCurrentChannel() {
+        return currentChannel;
+    }
+
+    public void start() {
+        EventLoopGroup group = new NioEventLoopGroup();
+        try {
+            Bootstrap clientBootstrap = new Bootstrap();
+            clientBootstrap.group(group);
+            clientBootstrap.channel(NioSocketChannel.class);
+            clientBootstrap.remoteAddress(new InetSocketAddress("localhost", 8189));
+            clientBootstrap.handler(new ChannelInitializer<SocketChannel>() {
+                protected void initChannel(SocketChannel socketChannel) throws Exception {
+                    socketChannel.pipeline().addLast(new ProtocolClientHandler());
+                    currentChannel = socketChannel;
+                }
+            });
+            ChannelFuture channelFuture = clientBootstrap.connect().sync();
+            channelFuture.channel().closeFuture().sync();
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                group.shutdownGracefully().sync();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void sendFile(byte firstByte, String fileName) throws IOException {
+        ByteBufAllocator al = new PooledByteBufAllocator();
+        ByteBuf buf = al.buffer(1024);
+        buf.writeByte(firstByte);          // command
+        byte[] fn = fileName.getBytes();
+        byte fnLength =(byte) fn.length;
+        buf.writeByte(fnLength);           // filename length
+        buf.writeBytes(fn);                // filename (bytes)
+        RandomAccessFile raf = new RandomAccessFile("client_storage//" + fileName,"r");
+        FileSpliterator fs = new FileSpliterator("client_storage",fileName);
+        byte[] data = new byte[(int) fs.getOnePartLength()];
+        for (int i = 0; i < fs.getNumberOfParts() ; i++) {
+            raf.read(data);
+            buf.writeBytes(data);
+            currentChannel.writeAndFlush(buf);
+          //  buf.clear();
+           // buf.release();
+            System.out.println("one part sent...");
+        }
+        // отправляем "хвост" байтов
+        data = new byte[(int)fs.getTailLength()];
+          while(raf.read(data) != -1){
+        buf.writeBytes(data);
+        currentChannel.writeAndFlush(buf);
+        buf.clear();
+        buf.release();
+        raf.close();
+        System.out.println("file sent");}
+    }
+    public void sendFileRequest(byte firstByte, String fileName) throws IOException {
+        ByteBufAllocator al = new PooledByteBufAllocator();
+        ByteBuf buf = al.buffer(1024);
+        buf.writeByte(firstByte);          // command
+        System.out.println(firstByte);
+        byte[] fn = fileName.getBytes();
+        byte fnLength =(byte) fn.length;
+        buf.writeByte(fnLength);           // filename length
+        buf.writeBytes(fn);                // filename (bytes)
+        //   byte[] b = new byte[buf.readableBytes()];
+        //   buf.readBytes(b);
+        currentChannel.writeAndFlush(buf);
+        System.out.println("file request sent");
+    }
+    public boolean isConnectionOpened() {
+        return currentChannel != null && currentChannel.isActive();
+    }
+
+    public void closeConnection() {
+        currentChannel.close();
+    }
+}
+public class ProtocolClientHandler extends ChannelInboundHandlerAdapter {
+    private int state = -1;
+    FileOutputStream fos;
+    byte fileNameLength = 0;
+    byte[] fileName = null;
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        ByteBuf buf = (ByteBuf)msg;
+        // COMMAND
+        try {
+            if (state == -1) {
+                if (buf.readableBytes() >= 1) {
+                    byte firstByte = buf.readByte();
+                    if (firstByte == 3) {
+                        System.out.println("file from server");
+                        state = 0;
+                    }
+                }
+            }
+            //FileName length
+            if (state == 0) {
+                if (buf.readableBytes() >= 15) {
+                    fileNameLength = buf.readByte();
+                    System.out.println("filename length: " + fileNameLength);
+                    state = 1;
+                }
+            }
+            //FileName
+            if (state == 1) {
+                fileName = new byte[(int) fileNameLength];
+                buf.readBytes(fileName);
+                state = 2;
+            }
+            //data
+            if (state == 2) {
+                String fName = new String(fileName);
+                System.out.println(fName);
+                fos = new FileOutputStream("client_storage//" + fName, true);
+                state = 3;
+            }
+            if (state == 3) {
+                while (buf.readableBytes() > 0) {
+                    fos.write(buf.readByte());
+                }
+                buf.release();
+                // новые команды будут доступны только после того, как текущая завершится
+               // state = -1;
+               // fos.close();
+            }
+        }finally {
+            ctx.flush();
+          //  ReferenceCountUtil.release(msg);
+        }
+
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
+        ctx.close();
+    }
+}
+// MODUL COMMON
+public class FileSpliterator {
+    private String fileName;
+    private long fileSize;
+    private int numberOfParts = 1;
+    private long tailLength;
+    private long onePartLength = (fileSize - tailLength)/numberOfParts;
+    public long getOnePartLength(){return onePartLength;}
+    public int getNumberOfParts(){return numberOfParts;}
+    public long getTailLength(){return tailLength;}
+    private File fileInputStream;
+    public FileSpliterator(String source, String filename){
+        this.fileName = filename;
+        try{
+            fileInputStream = new File(source + "//" + filename);
+            this.fileSize = fileInputStream.length();
+            System.out.println("file size: " + fileSize);
+            if (fileSize < (long)1024*10){
+                numberOfParts = 1;
+                tailLength = 0;
+                onePartLength = fileSize;
+                return;
+            }
+            if (fileSize < (long)1024*1024 && fileSize > (long)1024*10){
+                if(fileSize > 1024*10 && fileSize < 1024* 200){
+                    numberOfParts = 5;
+                    tailLength = 1024;
+                    return;
+                }
+                numberOfParts = 15;
+                tailLength = 10*1024;
+                return;
+            }
+            if (fileSize < (long)1024*1024*10 && fileSize > (long)1024*1024){
+                if(fileSize > 1024*1024 && fileSize < 5*1024* 1024){
+                    numberOfParts = 30;
+                    tailLength = 10*1024;
+                    return;
+                }
+                numberOfParts = 60;
+                tailLength = 20*1024;
+                return;
+            }
+            if (fileSize < (long)1024*1024*100 && fileSize > (long)1024*1024*10){
+                if(fileSize > 1024*1024*10 && fileSize < 50*1024* 1024){
+                    numberOfParts = 100;
+                    tailLength = 50*1024;
+                    return;
+                }
+                numberOfParts = 250;
+                tailLength = 100*1024;
+            }
+            if (fileSize < (long)1024*1024*1000 && fileSize > (long)1024*1024*100){
+                if(fileSize > 1024*1024*100 && fileSize < 500*1024* 1024){
+                    numberOfParts = 500;
+                    tailLength = 50*1024;
+                    onePartLength = (fileSize - tailLength)/numberOfParts;
+                    return;
+                }
+                numberOfParts = 1000;
+                tailLength = 50*1024;
+            }
+
+        }catch (Exception e){e.printStackTrace(); }
+    }
+}
+public class ParseFileName {
+    public static String parseName(ByteBuf buf){
+        byte fileNameLength = buf.readByte();
+        byte[] fileName = new byte[(int)fileNameLength];
+        buf.readBytes(fileName);
+        return new String(fileName);
+    }
+}
+//server
+public class Server {
+    public Server() {
+    }
+
+    public void run() throws Exception {
+        EventLoopGroup mainGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+
+        try {
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(mainGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        protected void initChannel(SocketChannel socketChannel) throws Exception {
+                            socketChannel.pipeline().addLast(
+                                    new OutboundHandler(),
+                                    new ProtocolHandler());
+                        }
+                    })
+                    .option(ChannelOption.SO_BACKLOG, 128)
+                    .option(ChannelOption.TCP_NODELAY, true)
+                    .childOption(ChannelOption.SO_KEEPALIVE, true);
+            ChannelFuture future = b.bind(8189).sync();
+            future.channel().closeFuture().sync();
+        } finally {
+            mainGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+     //   Class.forName("org.sqlite.JDBC").getDeclaredConstructor().newInstance();
+        new Server().run();
+    }
+}
+public class ProtocolHandler extends ChannelInboundHandlerAdapter {
+    private int state = -1;
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        ByteBuf buf = (ByteBuf) msg;
+        String fileName;
+        FileOutputStream fos = null;
+        // COMMAND
+        if (state == -1) {
+            if (buf.readableBytes() >= 1) {
+                byte firstByte = buf.readByte();
+                if (firstByte == 1){
+                    System.out.println("Authorization");
+                    state = 0;
+                }
+                if (firstByte == 2){
+                    System.out.println("Sign In");
+                    state = 0;
+                }
+                if (firstByte == 3) {
+                    System.out.println("FILE");
+                    fileName = ParseFileName.parseName(buf);
+                    System.out.println(fileName);
+                    fos = new FileOutputStream("server_storage//" + fileName,true);
+                    state = 0;
+                }
+                if (firstByte == 4) {
+                    System.out.println("FILE REQUEST");
+                    ctx.writeAndFlush(ParseFileName.parseName(buf));
+                    state = - 1;
+                }
+                if (firstByte == 5) {
+                    System.out.println("DELETE FILE REQUEST");
+                    String filename = ParseFileName.parseName(buf);
+                    if (Files.deleteIfExists(Paths.get(filename))){
+                        System.out.println("File \"" + filename + "\" deleted");
+                    }else System.out.println("no such file...");
+                    state = - 1;
+                }
+                if (firstByte == 6) {
+                    System.out.println("CREATE DIRECTORY REQUEST");
+                    String filename = ParseFileName.parseName(buf);
+                    Files.createDirectory(Paths.get("server_storage//"+filename));
+                    state = - 1;
+                }
+                if (firstByte == 7) {
+                    System.out.println("DELETE DIRECTORY REQUEST");
+                    String filename = ParseFileName.parseName(buf);
+                    Files.deleteIfExists(Paths.get("server_storage//"+filename));
+                    state = - 1;
+                }
+                if (firstByte == 8) {
+                    System.out.println("CATALOGUE REQUEST");
+                    String filename = ParseFileName.parseName(buf);
+                    List<Path> list = new ArrayList<Path>();
+                    Files.walkFileTree(Paths.get("server_storage//"), new FileVisitor<Path>() {
+                        @Override
+                        public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                            return FileVisitResult.CONTINUE;
+                        }
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                            if (file.getFileName().toString().equals(filename)){
+                               list.add(Paths.get(filename));
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+                        @Override
+                        public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                            return null;
+                        }
+                        @Override
+                        public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                            return FileVisitResult.TERMINATE;
+                        }
+                    });
+                    ctx.write((byte)8);
+                    ctx.writeAndFlush(list);
+                    state = -1;
+                }
+                //здесь пробовал передавать по байту
+                if (state == 0){
+                    while (buf.readableBytes() > 0){
+                        fos.write(buf.readByte());
+
+                    }
+//                    while (buf.readableBytes() > 0) {
+//                        fos.write(buf.readByte());
+//                    }
+                    buf.clear();
+                    ctx.flush();
+                    fos.close();
+                    buf.release();
+                }
+            }
+        }
+       // ReferenceCountUtil.release(msg);
+    }
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
+        ctx.close();
+    }
+}
+public class OutboundHandler extends ChannelOutboundHandlerAdapter {
+    String filename;
+    RandomAccessFile raf;
+    FileSpliterator fs;
+    byte[] data;
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception{
+        filename =  (String)(msg);
+        System.out.println("file request: " + filename);
+        raf = new RandomAccessFile("server_storage//" + filename,"r");
+        fs = new FileSpliterator("server_storage" , filename);
+        System.out.println("number of parts: " + fs.getNumberOfParts() + " ,tail size: "
+                + fs.getTailLength() + " ,one part length: " + fs.getOnePartLength());
+        ByteBufAllocator al = new PooledByteBufAllocator();
+        ByteBuf buf = al.buffer();
+        buf.writeByte((byte)3);
+        buf.writeByte((byte)filename.length());
+        buf.writeBytes(filename.getBytes());
+        byte[] data = new byte[(int) fs.getOnePartLength()];
+        for (int i = 0; i < fs.getNumberOfParts() ; i++) {
+            raf.read(data);
+            buf.writeBytes(data);
+            ctx.writeAndFlush(buf);
+            ctx.fireChannelReadComplete();
+            buf.clear();
+           // buf.release();
+           // ReferenceCountUtil.release(msg);
+            System.out.println("one part sent...");
+        }
+        // отправляем "хвост" байтов
+        data = new byte[(int)fs.getTailLength()];
+      //  while(raf.read(data) != -1){
+            raf.read(data);
+            buf.writeBytes(data);
+            ctx.writeAndFlush(buf);
+            buf.release();
+            ReferenceCountUtil.release(msg);
+       // }
+}
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        ctx.close();
+    }
+}
